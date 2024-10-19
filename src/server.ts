@@ -127,24 +127,22 @@ const rootDir = path.resolve(__dirname, '..');
 const upload = multer({ dest: path.join(rootDir, 'uploads/') });
 
 // POST request handler for receiving images
-app.post('/', upload.single('inputFile'), async (req: Request, res: Response): Promise<void> => {
+app.post('/', upload.single('inputFile'), async (req, res) => {
     try {
         if (!req.file) {
             res.status(400).send('No file uploaded');
             return;
         }
 
-        // Use req.file.path directly without path.join
-        const filePath = req.file.path;
         const fileName = req.file.originalname;
+        const fileContent = fs.readFileSync(req.file.path).toString('base64');  // Encode image as base64
 
-        // Send message to SQS Request Queue
-        const fileContent = fs.readFileSync(filePath).toString('base64');
+        // Send message to SQS Request Queue with the base64-encoded image
         const sqsParams = {
             QueueUrl: requestQueueUrl,
             MessageBody: JSON.stringify({
                 fileName,
-                fileContent
+                fileContent  // Include base64-encoded image in the SQS message
             })
         };
 
@@ -161,22 +159,29 @@ app.post('/', upload.single('inputFile'), async (req: Request, res: Response): P
         let receivedMessage;
         while (!receivedMessage) {
             const response = await sqs.receiveMessage(receiveParams).promise();
+            
             if (response.Messages && response.Messages.length > 0) {
                 const message = response.Messages[0];
                 receivedMessage = message;
-
-                // Delete the message from the response queue after processing
-                await sqs.deleteMessage({
-                    QueueUrl: responseQueueUrl,
-                    ReceiptHandle: message.ReceiptHandle!
-                }).promise();
-
+        
+                // Check if ReceiptHandle exists before attempting to delete
+                if (message.ReceiptHandle) {
+                    // Delete the message from the response queue after processing
+                    await sqs.deleteMessage({
+                        QueueUrl: responseQueueUrl,
+                        ReceiptHandle: message.ReceiptHandle
+                    }).promise();
+                    console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
+                } else {
+                    console.error('ReceiptHandle is missing. Cannot delete message.');
+                }
+        
                 // Parse the response message and send it back to the user
                 const result = JSON.parse(message.Body!);
-                res.send(`${result.fileName}:${result.classificationResult}`);
+                res.send(`${result.fileName}: ${result.classificationResult}`);
                 return;
             }
-        }
+        }        
     } catch (error) {
         console.error('Error processing image request:', error);
         res.status(500).send('Error processing request');

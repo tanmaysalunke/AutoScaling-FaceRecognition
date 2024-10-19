@@ -22,6 +22,8 @@ const app = (0, express_1.default)();
 const port = 3000;
 // AWS Configuration
 aws_sdk_1.default.config.update({
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Access key
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY, // Secret key
     region: 'us-east-1'
 });
 const ec2 = new aws_sdk_1.default.EC2();
@@ -29,7 +31,7 @@ const sqs = new aws_sdk_1.default.SQS();
 const ASU_ID = '1229850390';
 const requestQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-req-queue`;
 const responseQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-resp-queue`;
-const amiId = '<AMI-ID>'; // Your App Tier AMI ID
+const amiId = 'ami-0df697fe14ff99106'; // Your App Tier AMI ID
 const maxInstances = 20;
 const minInstances = 0; // No instances when there are no pending messages
 const instanceType = 't2.micro'; // Adjust as needed
@@ -133,16 +135,14 @@ app.post('/', upload.single('inputFile'), (req, res) => __awaiter(void 0, void 0
             res.status(400).send('No file uploaded');
             return;
         }
-        // Use req.file.path directly without path.join
-        const filePath = req.file.path;
         const fileName = req.file.originalname;
-        // Send message to SQS Request Queue
-        const fileContent = fs_1.default.readFileSync(filePath).toString('base64');
+        const fileContent = fs_1.default.readFileSync(req.file.path).toString('base64'); // Encode image as base64
+        // Send message to SQS Request Queue with the base64-encoded image
         const sqsParams = {
             QueueUrl: requestQueueUrl,
             MessageBody: JSON.stringify({
                 fileName,
-                fileContent
+                fileContent // Include base64-encoded image in the SQS message
             })
         };
         yield sqs.sendMessage(sqsParams).promise();
@@ -159,14 +159,21 @@ app.post('/', upload.single('inputFile'), (req, res) => __awaiter(void 0, void 0
             if (response.Messages && response.Messages.length > 0) {
                 const message = response.Messages[0];
                 receivedMessage = message;
-                // Delete the message from the response queue after processing
-                yield sqs.deleteMessage({
-                    QueueUrl: responseQueueUrl,
-                    ReceiptHandle: message.ReceiptHandle
-                }).promise();
+                // Check if ReceiptHandle exists before attempting to delete
+                if (message.ReceiptHandle) {
+                    // Delete the message from the response queue after processing
+                    yield sqs.deleteMessage({
+                        QueueUrl: responseQueueUrl,
+                        ReceiptHandle: message.ReceiptHandle
+                    }).promise();
+                    console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
+                }
+                else {
+                    console.error('ReceiptHandle is missing. Cannot delete message.');
+                }
                 // Parse the response message and send it back to the user
                 const result = JSON.parse(message.Body);
-                res.send(`${result.fileName}:${result.classificationResult}`);
+                res.send(`${result.fileName}: ${result.classificationResult}`);
                 return;
             }
         }
