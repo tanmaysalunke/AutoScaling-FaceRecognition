@@ -1,6 +1,10 @@
 # Use a base image
 FROM node:14
 
+# Set environment variables
+ENV AWS_ACCESS_KEY_ID=your-access-key-id
+ENV AWS_SECRET_ACCESS_KEY=your-secret-access-key
+
 # Set the working directory inside the container
 WORKDIR /app
 

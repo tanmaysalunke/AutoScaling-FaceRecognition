@@ -10,6 +10,8 @@ const port = 3000;
 
 // AWS Configuration
 AWS.config.update({
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID, // Access key
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY, // Secret key
     region: 'us-east-1'
 });
 
@@ -19,7 +21,7 @@ const sqs = new AWS.SQS();
 const ASU_ID = '1229850390';
 const requestQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-req-queue`;
 const responseQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-resp-queue`;
-const amiId = '<AMI-ID>'; // Your App Tier AMI ID
+const amiId = 'ami-0df697fe14ff99106'; // Your App Tier AMI ID
 const maxInstances = 20;
 const minInstances = 0; // No instances when there are no pending messages
 const instanceType = 't2.micro'; // Adjust as needed
