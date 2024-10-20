@@ -54,8 +54,7 @@ function scaleOut(currentInstanceCount, desiredInstances) {
                         Tags: [{ Key: 'Name', Value: 'app-tier-instance' }]
                     }],
                 UserData: Buffer.from(`#!/bin/bash
-                sudo docker run -d -e ${process.env.AWS_ACCESS_KEY_ID} -e ${process.env.AWS_SECRET_ACCESS_KEY} -e ${process.env.AWS_REGION} --restart always ${process.env.DOCKER_USERNAME}/apptier:latest
-            `).toString('base64')
+                sudo docker run -d -e AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} -e AWS_REGION=${process.env.AWS_REGION} tanmaysalunke/apptier:latest`).toString('base64')
             };
             try {
                 const result = yield ec2.runInstances(params).promise();
