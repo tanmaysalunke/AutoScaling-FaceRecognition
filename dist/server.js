@@ -31,13 +31,14 @@ const sqs = new aws_sdk_1.default.SQS();
 const ASU_ID = '1229850390';
 const requestQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-req-queue`;
 const responseQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-resp-queue`;
-const amiId = 'ami-0df697fe14ff99106'; // Your App Tier AMI ID
+const amiId = 'ami-0866a3c8686eaeeba'; // Your App Tier AMI ID
 const maxInstances = 20;
 const minInstances = 0; // No instances when there are no pending messages
 const instanceType = 't2.micro'; // Adjust as needed
 // Function to scale out by launching new EC2 instances
 function scaleOut(currentInstanceCount, desiredInstances) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a;
         const instancesToLaunch = desiredInstances - currentInstanceCount;
         if (instancesToLaunch > 0) {
             const params = {
@@ -51,13 +52,24 @@ function scaleOut(currentInstanceCount, desiredInstances) {
                     }]
             };
             const result = yield ec2.runInstances(params).promise();
-            console.log(`${instancesToLaunch} EC2 instances launched.`);
+            // Safely check if instances were launched and instanceIds are not undefined
+            const instanceIds = (_a = result.Instances) === null || _a === void 0 ? void 0 : _a.map(instance => instance.InstanceId);
+            if (instanceIds && instanceIds.length > 0) {
+                console.log(`${instancesToLaunch} EC2 instances launched with IDs: ${instanceIds.join(', ')}`);
+            }
+            else {
+                console.log('No instances were launched.');
+            }
+        }
+        else {
+            console.log('No scaling out required.');
         }
     });
 }
 // Function to scale in by terminating EC2 instances
 function scaleIn(currentInstanceCount, desiredInstances) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
         const instancesToTerminate = currentInstanceCount - desiredInstances;
         if (instancesToTerminate > 0) {
             const params = {
@@ -65,30 +77,25 @@ function scaleIn(currentInstanceCount, desiredInstances) {
                 MaxResults: instancesToTerminate
             };
             const instances = yield ec2.describeInstances(params).promise();
-            // Check if instances.Reservations is defined and not empty
-            if (instances.Reservations && instances.Reservations.length > 0) {
-                // Collect valid instance IDs and filter out undefined ones
-                const instanceIds = instances.Reservations
-                    .flatMap(res => { var _a; return (_a = res.Instances) === null || _a === void 0 ? void 0 : _a.map(inst => inst.InstanceId); })
-                    .filter((id) => id !== undefined); // Type narrowing to filter out undefined
-                if (instanceIds.length > 0) {
-                    yield ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
-                    console.log(`${instancesToTerminate} EC2 instances terminated.`);
-                }
-                else {
-                    console.log('No valid instance IDs found to terminate.');
-                }
+            // Safely check for valid instance IDs
+            const instanceIds = (_b = (_a = instances.Reservations) === null || _a === void 0 ? void 0 : _a.flatMap(res => { var _a; return (_a = res.Instances) === null || _a === void 0 ? void 0 : _a.filter(instance => { var _a; return ((_a = instance === null || instance === void 0 ? void 0 : instance.State) === null || _a === void 0 ? void 0 : _a.Name) === 'running'; }).map(inst => inst.InstanceId); })) === null || _b === void 0 ? void 0 : _b.filter((id) => id !== undefined); // Type narrowing to filter out undefined
+            if (instanceIds && instanceIds.length > 0) {
+                yield ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
+                console.log(`${instancesToTerminate} EC2 instances terminated with IDs: ${instanceIds.join(', ')}`);
             }
             else {
-                console.log('No instances found to terminate.');
+                console.log('No valid instance IDs found to terminate.');
             }
+        }
+        else {
+            console.log('No scaling in required.');
         }
     });
 }
 // Function to monitor SQS and scale in/out EC2 instances accordingly
 function autoscale() {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a;
+        var _a, _b, _c;
         const params = {
             QueueUrl: requestQueueUrl,
             AttributeNames: ['ApproximateNumberOfMessages']
@@ -99,13 +106,10 @@ function autoscale() {
         // Get the current number of running App Tier instances
         const ec2Params = {
             Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-            MaxResults: 20
+            MaxResults: 50 // Use a larger number to ensure all instances are retrieved
         };
         const instanceData = yield ec2.describeInstances(ec2Params).promise();
-        // Check if Reservations exists and has content
-        const currentInstanceCount = instanceData.Reservations && instanceData.Reservations.length > 0
-            ? instanceData.Reservations.length
-            : 0;
+        const currentInstanceCount = ((_c = (_b = instanceData.Reservations) === null || _b === void 0 ? void 0 : _b.flatMap(res => res.Instances)) === null || _c === void 0 ? void 0 : _c.filter(instance => { var _a; return ((_a = instance === null || instance === void 0 ? void 0 : instance.State) === null || _a === void 0 ? void 0 : _a.Name) === 'running'; }).length) || 0;
         console.log(`Current App Tier instance count: ${currentInstanceCount}`);
         // Define thresholds for scaling
         const scaleOutThreshold = 10;
@@ -120,73 +124,69 @@ function autoscale() {
             const desiredInstances = Math.max(minInstances, Math.ceil(pendingMessages / scaleInThreshold));
             yield scaleIn(currentInstanceCount, desiredInstances);
         }
+        else {
+            console.log('No scaling action required.');
+        }
     });
 }
 // Periodically run autoscaling logic
-setInterval(autoscale, 60 * 1000); // Runs every 60 seconds
+setInterval(autoscale, 5 * 1000); // Runs every 5 seconds
 // Define root directory relative to the current file (even in dist)
 const rootDir = path_1.default.resolve(__dirname, '..');
 // Multer setup for handling file uploads (now relative to project root)
 const upload = (0, multer_1.default)({ dest: path_1.default.join(rootDir, 'uploads/') });
 // POST request handler for receiving images
 app.post('/', upload.single('inputFile'), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!req.file) {
+        res.status(400).send('No file uploaded');
+        return;
+    }
+    // Remove file extension for consistent naming
+    const fileName = req.file.originalname;
+    const baseFileName = path_1.default.basename(fileName, path_1.default.extname(fileName));
+    const fileContent = fs_1.default.readFileSync(req.file.path).toString('base64'); // Encode image as base64
+    fs_1.default.unlinkSync(req.file.path); // Delete the uploaded file immediately after reading
+    const sqsParams = {
+        QueueUrl: requestQueueUrl,
+        MessageBody: JSON.stringify({
+            fileName: baseFileName, // Use the base file name without extension for the message
+            fileContent
+        })
+    };
+    yield sqs.sendMessage(sqsParams).promise();
+    console.log(`Sent image ${fileName} to the request queue`);
+    const receiveParams = {
+        QueueUrl: responseQueueUrl,
+        MaxNumberOfMessages: 1,
+        WaitTimeSeconds: 20
+    };
     try {
-        if (!req.file) {
-            res.status(400).send('No file uploaded');
-            return;
-        }
-        const fileName = req.file.originalname;
-        const fileContent = fs_1.default.readFileSync(req.file.path).toString('base64'); // Encode image as base64
-        // Send message to SQS Request Queue with the base64-encoded image
-        const sqsParams = {
-            QueueUrl: requestQueueUrl,
-            MessageBody: JSON.stringify({
-                fileName,
-                fileContent // Include base64-encoded image in the SQS message
-            })
-        };
-        yield sqs.sendMessage(sqsParams).promise();
-        console.log(`Sent image ${fileName} to the request queue`);
-        // Poll for the response from the App Tier using the Response Queue
-        const receiveParams = {
-            QueueUrl: responseQueueUrl,
-            MaxNumberOfMessages: 1,
-            WaitTimeSeconds: 20
-        };
-        let receivedMessage;
-        while (!receivedMessage) {
+        while (true) {
             const response = yield sqs.receiveMessage(receiveParams).promise();
             if (response.Messages && response.Messages.length > 0) {
                 const message = response.Messages[0];
-                receivedMessage = message;
-                // Check if ReceiptHandle exists before attempting to delete
-                if (message.ReceiptHandle) {
-                    // Delete the message from the response queue after processing
-                    yield sqs.deleteMessage({
-                        QueueUrl: responseQueueUrl,
-                        ReceiptHandle: message.ReceiptHandle
-                    }).promise();
-                    console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
+                if (message.Body && message.ReceiptHandle) {
+                    const result = JSON.parse(message.Body);
+                    if (result.fileName === baseFileName) {
+                        yield sqs.deleteMessage({
+                            QueueUrl: responseQueueUrl,
+                            ReceiptHandle: message.ReceiptHandle
+                        }).promise();
+                        console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
+                        res.send(`${result.fileName}:${result.classificationResult}`); // Ensure no space after colon
+                        return;
+                    }
                 }
-                else {
-                    console.error('ReceiptHandle is missing. Cannot delete message.');
-                }
-                // Parse the response message and send it back to the user
-                const result = JSON.parse(message.Body);
-                res.send(`${result.fileName}: ${result.classificationResult}`);
-                return;
+            }
+            else {
+                console.log("No response received, continuing to poll...");
+                yield new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before polling again
             }
         }
     }
     catch (error) {
         console.error('Error processing image request:', error);
         res.status(500).send('Error processing request');
-    }
-    finally {
-        // Clean up uploaded file
-        if (req.file) {
-            fs_1.default.unlinkSync(req.file.path);
-        }
     }
 }));
 // Start the Express server

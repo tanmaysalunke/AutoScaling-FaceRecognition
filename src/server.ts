@@ -21,7 +21,7 @@ const sqs = new AWS.SQS();
 const ASU_ID = '1229850390';
 const requestQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-req-queue`;
 const responseQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-resp-queue`;
-const amiId = 'ami-0df697fe14ff99106'; // Your App Tier AMI ID
+const amiId = 'ami-0866a3c8686eaeeba'; // Your App Tier AMI ID
 const maxInstances = 20;
 const minInstances = 0; // No instances when there are no pending messages
 const instanceType = 't2.micro'; // Adjust as needed
@@ -41,7 +41,17 @@ async function scaleOut(currentInstanceCount: number, desiredInstances: number) 
             }]
         };
         const result = await ec2.runInstances(params).promise();
-        console.log(`${instancesToLaunch} EC2 instances launched.`);
+
+        // Safely check if instances were launched and instanceIds are not undefined
+        const instanceIds = result.Instances?.map(instance => instance.InstanceId);
+        
+        if (instanceIds && instanceIds.length > 0) {
+            console.log(`${instancesToLaunch} EC2 instances launched with IDs: ${instanceIds.join(', ')}`);
+        } else {
+            console.log('No instances were launched.');
+        }
+    } else {
+        console.log('No scaling out required.');
     }
 }
 
@@ -55,25 +65,21 @@ async function scaleIn(currentInstanceCount: number, desiredInstances: number) {
         };
         const instances = await ec2.describeInstances(params).promise();
 
-        // Check if instances.Reservations is defined and not empty
-        if (instances.Reservations && instances.Reservations.length > 0) {
-            // Collect valid instance IDs and filter out undefined ones
-            const instanceIds = instances.Reservations
-                .flatMap(res => res.Instances?.map(inst => inst.InstanceId))
-                .filter((id): id is string => id !== undefined); // Type narrowing to filter out undefined
+        // Safely check for valid instance IDs
+        const instanceIds = instances.Reservations
+            ?.flatMap(res => res.Instances?.filter(instance => instance?.State?.Name === 'running').map(inst => inst.InstanceId))
+            ?.filter((id): id is string => id !== undefined); // Type narrowing to filter out undefined
 
-            if (instanceIds.length > 0) {
-                await ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
-                console.log(`${instancesToTerminate} EC2 instances terminated.`);
-            } else {
-                console.log('No valid instance IDs found to terminate.');
-            }
+        if (instanceIds && instanceIds.length > 0) {
+            await ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
+            console.log(`${instancesToTerminate} EC2 instances terminated with IDs: ${instanceIds.join(', ')}`);
         } else {
-            console.log('No instances found to terminate.');
+            console.log('No valid instance IDs found to terminate.');
         }
+    } else {
+        console.log('No scaling in required.');
     }
 }
-
 
 // Function to monitor SQS and scale in/out EC2 instances accordingly
 async function autoscale() {
@@ -89,15 +95,13 @@ async function autoscale() {
     // Get the current number of running App Tier instances
     const ec2Params = {
         Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-        MaxResults: 20
+        MaxResults: 50 // Use a larger number to ensure all instances are retrieved
     };
 
     const instanceData = await ec2.describeInstances(ec2Params).promise();
-
-    // Check if Reservations exists and has content
-    const currentInstanceCount = instanceData.Reservations && instanceData.Reservations.length > 0 
-        ? instanceData.Reservations.length 
-        : 0;
+    const currentInstanceCount = instanceData.Reservations
+        ?.flatMap(res => res.Instances)
+        ?.filter(instance => instance?.State?.Name === 'running').length || 0;
 
     console.log(`Current App Tier instance count: ${currentInstanceCount}`);
 
@@ -113,12 +117,13 @@ async function autoscale() {
         // Scale in: decrease the number of instances
         const desiredInstances = Math.max(minInstances, Math.ceil(pendingMessages / scaleInThreshold));
         await scaleIn(currentInstanceCount, desiredInstances);
+    } else {
+        console.log('No scaling action required.');
     }
 }
 
-
 // Periodically run autoscaling logic
-setInterval(autoscale, 60 * 1000); // Runs every 60 seconds
+setInterval(autoscale, 5 * 1000); // Runs every 5 seconds
 
 // Define root directory relative to the current file (even in dist)
 const rootDir = path.resolve(__dirname, '..');
@@ -127,72 +132,64 @@ const rootDir = path.resolve(__dirname, '..');
 const upload = multer({ dest: path.join(rootDir, 'uploads/') });
 
 // POST request handler for receiving images
-app.post('/', upload.single('inputFile'), async (req, res) => {
+app.post('/', upload.single('inputFile'), async (req: Request, res: Response): Promise<void> => {
+    if (!req.file) {
+        res.status(400).send('No file uploaded');
+        return;
+    }
+
+    // Remove file extension for consistent naming
+    const fileName = req.file.originalname;
+    const baseFileName = path.basename(fileName, path.extname(fileName));
+
+    const fileContent = fs.readFileSync(req.file.path).toString('base64');  // Encode image as base64
+    fs.unlinkSync(req.file.path); // Delete the uploaded file immediately after reading
+
+    const sqsParams = {
+        QueueUrl: requestQueueUrl,
+        MessageBody: JSON.stringify({
+            fileName: baseFileName,  // Use the base file name without extension for the message
+            fileContent
+        })
+    };
+
+    await sqs.sendMessage(sqsParams).promise();
+    console.log(`Sent image ${fileName} to the request queue`);
+
+    const receiveParams = {
+        QueueUrl: responseQueueUrl,
+        MaxNumberOfMessages: 1,
+        WaitTimeSeconds: 20
+    };
+
     try {
-        if (!req.file) {
-            res.status(400).send('No file uploaded');
-            return;
-        }
-
-        const fileName = req.file.originalname;
-        const fileContent = fs.readFileSync(req.file.path).toString('base64');  // Encode image as base64
-
-        // Send message to SQS Request Queue with the base64-encoded image
-        const sqsParams = {
-            QueueUrl: requestQueueUrl,
-            MessageBody: JSON.stringify({
-                fileName,
-                fileContent  // Include base64-encoded image in the SQS message
-            })
-        };
-
-        await sqs.sendMessage(sqsParams).promise();
-        console.log(`Sent image ${fileName} to the request queue`);
-
-        // Poll for the response from the App Tier using the Response Queue
-        const receiveParams = {
-            QueueUrl: responseQueueUrl,
-            MaxNumberOfMessages: 1,
-            WaitTimeSeconds: 20
-        };
-
-        let receivedMessage;
-        while (!receivedMessage) {
+        while (true) {
             const response = await sqs.receiveMessage(receiveParams).promise();
-            
             if (response.Messages && response.Messages.length > 0) {
                 const message = response.Messages[0];
-                receivedMessage = message;
-        
-                // Check if ReceiptHandle exists before attempting to delete
-                if (message.ReceiptHandle) {
-                    // Delete the message from the response queue after processing
-                    await sqs.deleteMessage({
-                        QueueUrl: responseQueueUrl,
-                        ReceiptHandle: message.ReceiptHandle
-                    }).promise();
-                    console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
-                } else {
-                    console.error('ReceiptHandle is missing. Cannot delete message.');
+                if (message.Body && message.ReceiptHandle) {
+                    const result = JSON.parse(message.Body);
+
+                    if (result.fileName === baseFileName) {
+                        await sqs.deleteMessage({
+                            QueueUrl: responseQueueUrl,
+                            ReceiptHandle: message.ReceiptHandle
+                        }).promise();
+                        console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
+                        res.send(`${result.fileName}:${result.classificationResult}`); // Ensure no space after colon
+                        return;
+                    }
                 }
-        
-                // Parse the response message and send it back to the user
-                const result = JSON.parse(message.Body!);
-                res.send(`${result.fileName}: ${result.classificationResult}`);
-                return;
+            } else {
+                console.log("No response received, continuing to poll...");
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before polling again
             }
-        }        
+        }
     } catch (error) {
         console.error('Error processing image request:', error);
         res.status(500).send('Error processing request');
-    } finally {
-        // Clean up uploaded file
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
     }
 });
-
 
 // Start the Express server
 app.listen(port, () => {
