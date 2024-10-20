@@ -60,19 +60,19 @@ async function scaleIn(currentInstanceCount: number, desiredInstances: number) {
     const instancesToTerminate = currentInstanceCount - desiredInstances;
     if (instancesToTerminate > 0) {
         const params = {
-            Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-            MaxResults: instancesToTerminate
+            Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }]
         };
         const instances = await ec2.describeInstances(params).promise();
 
-        // Safely check for valid instance IDs
+        // Flatten the instances and filter for running instances
         const instanceIds = instances.Reservations
             ?.flatMap(res => res.Instances?.filter(instance => instance?.State?.Name === 'running').map(inst => inst.InstanceId))
-            ?.filter((id): id is string => id !== undefined); // Type narrowing to filter out undefined
+            ?.filter((id): id is string => id !== undefined);
 
         if (instanceIds && instanceIds.length > 0) {
-            await ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
-            console.log(`${instancesToTerminate} EC2 instances terminated with IDs: ${instanceIds.join(', ')}`);
+            const terminateInstanceIds = instanceIds.slice(0, instancesToTerminate);
+            await ec2.terminateInstances({ InstanceIds: terminateInstanceIds }).promise();
+            console.log(`${terminateInstanceIds.length} EC2 instances terminated with IDs: ${terminateInstanceIds.join(', ')}`);
         } else {
             console.log('No valid instance IDs found to terminate.');
         }

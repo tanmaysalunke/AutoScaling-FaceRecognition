@@ -73,15 +73,15 @@ function scaleIn(currentInstanceCount, desiredInstances) {
         const instancesToTerminate = currentInstanceCount - desiredInstances;
         if (instancesToTerminate > 0) {
             const params = {
-                Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-                MaxResults: instancesToTerminate
+                Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }]
             };
             const instances = yield ec2.describeInstances(params).promise();
-            // Safely check for valid instance IDs
-            const instanceIds = (_b = (_a = instances.Reservations) === null || _a === void 0 ? void 0 : _a.flatMap(res => { var _a; return (_a = res.Instances) === null || _a === void 0 ? void 0 : _a.filter(instance => { var _a; return ((_a = instance === null || instance === void 0 ? void 0 : instance.State) === null || _a === void 0 ? void 0 : _a.Name) === 'running'; }).map(inst => inst.InstanceId); })) === null || _b === void 0 ? void 0 : _b.filter((id) => id !== undefined); // Type narrowing to filter out undefined
+            // Flatten the instances and filter for running instances
+            const instanceIds = (_b = (_a = instances.Reservations) === null || _a === void 0 ? void 0 : _a.flatMap(res => { var _a; return (_a = res.Instances) === null || _a === void 0 ? void 0 : _a.filter(instance => { var _a; return ((_a = instance === null || instance === void 0 ? void 0 : instance.State) === null || _a === void 0 ? void 0 : _a.Name) === 'running'; }).map(inst => inst.InstanceId); })) === null || _b === void 0 ? void 0 : _b.filter((id) => id !== undefined);
             if (instanceIds && instanceIds.length > 0) {
-                yield ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
-                console.log(`${instancesToTerminate} EC2 instances terminated with IDs: ${instanceIds.join(', ')}`);
+                const terminateInstanceIds = instanceIds.slice(0, instancesToTerminate);
+                yield ec2.terminateInstances({ InstanceIds: terminateInstanceIds }).promise();
+                console.log(`${terminateInstanceIds.length} EC2 instances terminated with IDs: ${terminateInstanceIds.join(', ')}`);
             }
             else {
                 console.log('No valid instance IDs found to terminate.');
