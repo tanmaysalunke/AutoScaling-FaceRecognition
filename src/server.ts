@@ -21,12 +21,14 @@ const sqs = new AWS.SQS();
 const ASU_ID = '1229850390';
 const requestQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-req-queue`;
 const responseQueueUrl = `https://sqs.us-east-1.amazonaws.com/442042549532/${ASU_ID}-resp-queue`;
-const amiId = 'ami-0866a3c8686eaeeba'; // Your App Tier AMI ID
+const amiId = 'ami-04106cfbfa4d9bbf6'; // Your App Tier AMI ID
 const maxInstances = 20;
 const minInstances = 0; // No instances when there are no pending messages
 const instanceType = 't2.micro'; // Adjust as needed
 
-// Function to scale out by launching new EC2 instances
+const pendingRequests = new Map();
+
+// Function to scale out by launching EC2 instances
 async function scaleOut(currentInstanceCount: number, desiredInstances: number) {
     const instancesToLaunch = desiredInstances - currentInstanceCount;
     if (instancesToLaunch > 0) {
@@ -35,20 +37,27 @@ async function scaleOut(currentInstanceCount: number, desiredInstances: number) 
             InstanceType: instanceType,
             MinCount: instancesToLaunch,
             MaxCount: instancesToLaunch,
+            KeyName: 'project2',
+            SecurityGroupIds: ['sg-0273f2abaf816cfe1'],
             TagSpecifications: [{
                 ResourceType: 'instance',
                 Tags: [{ Key: 'Name', Value: 'app-tier-instance' }]
-            }]
+            }],
+            UserData: Buffer.from(`#!/bin/bash
+                sudo docker run -d -e ${process.env.AWS_ACCESS_KEY_ID} -e ${process.env.AWS_SECRET_ACCESS_KEY} -e ${process.env.AWS_REGION} --restart always ${process.env.DOCKER_USERNAME}/apptier:latest
+            `).toString('base64')
         };
-        const result = await ec2.runInstances(params).promise();
+        try {
+            const result = await ec2.runInstances(params).promise();
+            const instanceIds = result.Instances?.map(instance => instance.InstanceId);
 
-        // Safely check if instances were launched and instanceIds are not undefined
-        const instanceIds = result.Instances?.map(instance => instance.InstanceId);
-        
-        if (instanceIds && instanceIds.length > 0) {
-            console.log(`${instancesToLaunch} EC2 instances launched with IDs: ${instanceIds.join(', ')}`);
-        } else {
-            console.log('No instances were launched.');
+            if (instanceIds && instanceIds.length > 0) {
+                console.log(`${instancesToLaunch} EC2 instances launched with IDs: ${instanceIds.join(', ')}`);
+            } else {
+                console.log('No instances were launched.');
+            }
+        } catch (error) {
+            console.error('Error launching instances:', error);
         }
     } else {
         console.log('No scaling out required.');
@@ -58,23 +67,28 @@ async function scaleOut(currentInstanceCount: number, desiredInstances: number) 
 // Function to scale in by terminating EC2 instances
 async function scaleIn(currentInstanceCount: number, desiredInstances: number) {
     const instancesToTerminate = currentInstanceCount - desiredInstances;
+
     if (instancesToTerminate > 0) {
         const params = {
             Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }]
         };
-        const instances = await ec2.describeInstances(params).promise();
+        try {
+            const instances = await ec2.describeInstances(params).promise();
+            const instanceIds = instances.Reservations
+                ?.flatMap(res => res.Instances)
+                ?.filter(instance => instance?.State?.Name === 'running')
+                .map(instance => instance?.InstanceId)
+                .filter((id): id is string => id !== undefined);
 
-        // Flatten the instances and filter for running instances
-        const instanceIds = instances.Reservations
-            ?.flatMap(res => res.Instances?.filter(instance => instance?.State?.Name === 'running').map(inst => inst.InstanceId))
-            ?.filter((id): id is string => id !== undefined);
-
-        if (instanceIds && instanceIds.length > 0) {
-            const terminateInstanceIds = instanceIds.slice(0, instancesToTerminate);
-            await ec2.terminateInstances({ InstanceIds: terminateInstanceIds }).promise();
-            console.log(`${terminateInstanceIds.length} EC2 instances terminated with IDs: ${terminateInstanceIds.join(', ')}`);
-        } else {
-            console.log('No valid instance IDs found to terminate.');
+            if (instanceIds && instanceIds.length > 0) {
+                console.log(`Terminating all instances: ${instanceIds.join(', ')}`);
+                await ec2.terminateInstances({ InstanceIds: instanceIds }).promise();
+                console.log(`All EC2 instances terminated.`);
+            } else {
+                console.log('No instances found to terminate.');
+            }
+        } catch (error) {
+            console.error('Error terminating instances:', error);
         }
     } else {
         console.log('No scaling in required.');
@@ -83,44 +97,48 @@ async function scaleIn(currentInstanceCount: number, desiredInstances: number) {
 
 // Function to monitor SQS and scale in/out EC2 instances accordingly
 async function autoscale() {
+    console.log("Running auto scaling");
     const params = {
         QueueUrl: requestQueueUrl,
         AttributeNames: ['ApproximateNumberOfMessages']
     };
 
-    const result = await sqs.getQueueAttributes(params).promise();
-    const pendingMessages = parseInt(result.Attributes?.ApproximateNumberOfMessages || '0', 10);
-    console.log(`Pending messages in queue: ${pendingMessages}`);
+    try {
+        const result = await sqs.getQueueAttributes(params).promise();
+        const pendingMessages = parseInt(result.Attributes?.ApproximateNumberOfMessages || '0', 10);
+        console.log(`Pending messages in queue: ${pendingMessages}`);
 
-    // Get the current number of running App Tier instances
-    const ec2Params = {
-        Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-        MaxResults: 50 // Use a larger number to ensure all instances are retrieved
-    };
+        const ec2Params = {
+            Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
+            MaxResults: 50
+        };
 
-    const instanceData = await ec2.describeInstances(ec2Params).promise();
-    const currentInstanceCount = instanceData.Reservations
-        ?.flatMap(res => res.Instances)
-        ?.filter(instance => instance?.State?.Name === 'running').length || 0;
+        const instanceData = await ec2.describeInstances(ec2Params).promise();
+        const currentInstanceCount = instanceData.Reservations
+            ?.flatMap(res => res.Instances)
+            ?.filter(instance => instance?.State?.Name === 'running').length || 0;
 
-    console.log(`Current App Tier instance count: ${currentInstanceCount}`);
+        console.log(`Current App Tier instance count: ${currentInstanceCount}`);
 
-    // Define thresholds for scaling
-    const scaleOutThreshold = 10;
-    const scaleInThreshold = 3;
-
-    if (pendingMessages > scaleOutThreshold && currentInstanceCount < maxInstances) {
-        // Scale out: increase the number of instances
-        const desiredInstances = Math.min(maxInstances, currentInstanceCount + Math.ceil(pendingMessages / scaleOutThreshold));
-        await scaleOut(currentInstanceCount, desiredInstances);
-    } else if (pendingMessages < scaleInThreshold && currentInstanceCount > minInstances) {
-        // Scale in: decrease the number of instances
-        const desiredInstances = Math.max(minInstances, Math.ceil(pendingMessages / scaleInThreshold));
-        await scaleIn(currentInstanceCount, desiredInstances);
-    } else {
-        console.log('No scaling action required.');
+        if (pendingMessages > 0) {
+            const desiredInstances = Math.min(maxInstances, pendingMessages);
+            if (desiredInstances > currentInstanceCount) {
+                console.log(`Scaling out to ${desiredInstances} instances.`);
+                await scaleOut(currentInstanceCount, desiredInstances);
+            } else {
+                console.log('Desired instances are less than or equal to current instances. No scaling out required.');
+            }
+        } else if (pendingMessages === 0 && currentInstanceCount > 0) {
+            console.log('Queue is empty. Terminating all instances.');
+            await scaleIn(currentInstanceCount, 0);
+        } else {
+            console.log('No scaling action required.');
+        }
+    } catch (error) {
+        console.error('Error during autoscaling:', error);
     }
 }
+
 
 // Periodically run autoscaling logic
 setInterval(autoscale, 5 * 1000); // Runs every 5 seconds
@@ -152,46 +170,83 @@ app.post('/', upload.single('inputFile'), async (req: Request, res: Response): P
             fileContent
         })
     };
-
-    await sqs.sendMessage(sqsParams).promise();
-    console.log(`Sent image ${fileName} to the request queue`);
-
-    const receiveParams = {
-        QueueUrl: responseQueueUrl,
-        MaxNumberOfMessages: 1,
-        WaitTimeSeconds: 20
-    };
-
+    const RESPONSE_TIMEOUT = 200000;
+    const requestId = baseFileName;
     try {
-        while (true) {
-            const response = await sqs.receiveMessage(receiveParams).promise();
-            if (response.Messages && response.Messages.length > 0) {
-                const message = response.Messages[0];
-                if (message.Body && message.ReceiptHandle) {
-                    const result = JSON.parse(message.Body);
+        await sqs.sendMessage(sqsParams).promise();
+        console.log(`Sent image ${fileName} to the request queue`);
 
-                    if (result.fileName === baseFileName) {
-                        await sqs.deleteMessage({
-                            QueueUrl: responseQueueUrl,
-                            ReceiptHandle: message.ReceiptHandle
-                        }).promise();
-                        console.log(`Deleted message with ReceiptHandle: ${message.ReceiptHandle}`);
-                        res.send(`${result.fileName}:${result.classificationResult}`); // Ensure no space after colon
-                        return;
-                    }
-                }
-            } else {
-                console.log("No response received, continuing to poll...");
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before polling again
-            }
+        // Wait for the classification result or timeout
+        const result = await new Promise<string>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pendingRequests.delete(baseFileName);
+                reject(new Error("Timeout waiting for response"));
+            }, RESPONSE_TIMEOUT);
+
+            pendingRequests.set(baseFileName, (result: string) => {
+                clearTimeout(timer);
+                resolve(result);
+            });
+        });
+
+        // Send the result back to the client
+        res.send(`${baseFileName}:${result}`);
+    } catch (error: unknown) {
+        if (error instanceof Error) {
+            console.error('Error processing request:', error.message);
+            res.status(500).send(`Error processing request: ${error.message}`);
+        } else {
+            console.error('Unexpected error:', error);
+            res.status(500).send('An unexpected error occurred');
         }
-    } catch (error) {
-        console.error('Error processing image request:', error);
-        res.status(500).send('Error processing request');
     }
 });
+
+async function pollResponseQueue() {
+    while (true) {
+      console.log("Polling for messages");
+      try {
+        const receiveParams = {
+            QueueUrl: responseQueueUrl,
+            MaxNumberOfMessages: 10,
+            WaitTimeSeconds: 10,
+        };
+
+        const response = await sqs.receiveMessage(receiveParams).promise();
+  
+        if (response.Messages) {
+          for (const message of response.Messages) {
+            const responseBody = JSON.parse(message.Body || "{}");
+            // const { requestId, classificationResult } = responseBody;
+            const requestId = responseBody.fileName;
+            const classificationResult = responseBody.classificationResult;
+            // Check if we have a pending request with this requestId
+            const resolve = pendingRequests.get(requestId);
+            if (resolve) {
+              console.log("Message Resolving");
+              // Resolve the Promise to unblock the request handler
+              resolve(classificationResult);
+              pendingRequests.delete(requestId);
+              console.log("Message Resolved");
+              if (message.ReceiptHandle) {
+                    await sqs.deleteMessage({
+                        QueueUrl: responseQueueUrl,
+                        ReceiptHandle: message.ReceiptHandle
+                    }).promise();
+                } else {
+                    console.error("ReceiptHandle is undefined, cannot delete message");
+                }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error polling response queue:", error);
+        }
+    }
+}
 
 // Start the Express server
 app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
+    pollResponseQueue();
 });
