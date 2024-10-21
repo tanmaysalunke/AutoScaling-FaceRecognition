@@ -165,6 +165,9 @@ async function getRunningInstances() {
 }
 
 let instanceCounter = 1;
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Launch a new app-tier instance
 async function launchInstances(numInstancesToLaunch) {
@@ -198,6 +201,9 @@ async function launchInstances(numInstancesToLaunch) {
       `Launching instance with name: app-tier-instance-${instanceCounter}`
     );
     instanceCounter++; // Increment the counter for the next instance
+
+    // Add a delay to avoid hitting the API request limit
+    await delay(1000); // Wait for 1 second between launching instances
   }
 
   // wait for all instances to launch
