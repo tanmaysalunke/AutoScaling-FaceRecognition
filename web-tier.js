@@ -176,8 +176,14 @@ async function launchInstances(numInstancesToLaunch) {
 
   const instancesToLaunch = [];
 
+  // Calculate how many instances can be launched based on the current instanceCounter
+  const maxLaunchableInstances = Math.min(
+    numInstancesToLaunch,
+    20 - instanceCounter
+  );
+
   // Generate instance launch params for each instance
-  for (let i = 0; i < numInstancesToLaunch; i++) {
+  for (let i = 0; i < maxLaunchableInstances; i++) {
     const params = {
       ImageId: amiId,
       InstanceType: instanceType,
