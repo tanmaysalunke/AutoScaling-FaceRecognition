@@ -181,7 +181,7 @@ async function launchInstances(numInstancesToLaunch) {
     numInstancesToLaunch,
     20 - instanceCounter
   );
-
+  console.log("Will launch the instances");
   // Generate instance launch params for each instance
   for (let i = 0; i < maxLaunchableInstances; i++) {
     const params = {
@@ -201,7 +201,7 @@ async function launchInstances(numInstancesToLaunch) {
       ],
       UserData: Buffer.from(userDataScript).toString("base64"), // Base64 encode the user-data script
     };
-
+    console.log("Launching");
     instancesToLaunch.push(ec2.runInstances(params).promise());
     console.log(
       `Launching instance with name: app-tier-instance-${instanceCounter}`
