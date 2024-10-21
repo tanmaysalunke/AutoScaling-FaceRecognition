@@ -149,7 +149,7 @@ async function getQueueLength() {
 async function getRunningInstances() {
   const data = await ec2
     .describeInstances({
-      Filters: [{ Name: "tag:Name", Values: ["app-tier-instance"] }],
+      Filters: [{ Name: "tag:Name", Values: ["app-tier-instance-*"] }],
     })
     .promise();
 
