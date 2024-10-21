@@ -236,6 +236,7 @@ async function autoscaleAppTier() {
   const queueLength = await getQueueLength();
   const runningInstances = await getRunningInstances();
   const numRunningInstances = runningInstances.length;
+  instanceCounter = numRunningInstances + 1;
 
   console.log(`Queue length: ${queueLength}`);
   console.log(`Running instances: ${numRunningInstances}`);
