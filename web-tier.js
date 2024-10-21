@@ -15,7 +15,7 @@ const minInstances = 0;
 const maxInstances = 20;
 const activeRequests = new Map();
 
-const amiId = "ami-04106cfbfa4d9bbf6"; // Replace with your actual AMI ID
+const amiId = "ami-092a3d15cd0d71494"; // Replace with your actual AMI ID
 const instanceType = "t2.micro"; // Replace with the desired instance type
 const keyName = "project2"; // Replace with the name of your EC2 key pair
 

@@ -58,7 +58,7 @@ jobs:
 
             echo "Starting project2 container..."
             docker run -d --name project2 --network my-network \
-              -p 80:3000 \
+              -p 80:80 \
               -v /path/to/data:/app/data \
               -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
               -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
