@@ -169,27 +169,43 @@ async function launchInstances(numInstancesToLaunch) {
   const userDataScript = `#!/bin/bash
     sudo docker run -d -e AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} -e AWS_REGION=${process.env.AWS_REGION} tanmaysalunke/apptier:latest`;
 
-  const params = {
-    ImageId: amiId,
-    InstanceType: instanceType,
-    MinCount: numInstancesToLaunch, // Launch at least this many instances
-    MaxCount: numInstancesToLaunch, // Launch up to this many instances
-    KeyName: keyName,
-    SecurityGroupIds: ["sg-0273f2abaf816cfe1"],
-    TagSpecifications: [
-      {
-        ResourceType: "instance",
-        Tags: [{ Key: "Name", Value: "app-tier-instance" }],
-      },
-    ],
-    UserData: Buffer.from(userDataScript).toString("base64"), // Base64 encode the user-data script
-  };
+  const instancesToLaunch = [];
 
-  const data = await ec2.runInstances(params).promise();
-  console.log(
-    `Launched ${numInstancesToLaunch} instance(s):`,
-    data.Instances.map((i) => i.InstanceId)
-  );
+  // Generate instance launch params for each instance
+  for (let i = 0; i < numInstancesToLaunch; i++) {
+    const params = {
+      ImageId: amiId,
+      InstanceType: instanceType,
+      MinCount: 1, // Launch one instance at a time
+      MaxCount: 1, // Launch up to this many instances
+      KeyName: keyName,
+      SecurityGroupIds: ["sg-0273f2abaf816cfe1"],
+      TagSpecifications: [
+        {
+          ResourceType: "instance",
+          Tags: [
+            { Key: "Name", Value: `app-tier-instance-${instanceCounter}` },
+          ],
+        },
+      ],
+      UserData: Buffer.from(userDataScript).toString("base64"), // Base64 encode the user-data script
+    };
+
+    instancesToLaunch.push(ec2.runInstances(params).promise());
+    console.log(
+      `Launching instance with name: app-tier-instance-${instanceCounter}`
+    );
+    instanceCounter++; // Increment the counter for the next instance
+  }
+
+  // wait for all instances to launch
+  const data = await Promise.all(instancesToLaunch);
+  data.forEach((instanceData) => {
+    console.log(
+      `Launched instance(s):`,
+      instanceData.Instances.map((i) => i.InstanceId)
+    );
+  });
 }
 
 // Terminate an app-tier instance
