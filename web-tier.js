@@ -172,7 +172,7 @@ function delay(ms) {
 // Launch a new app-tier instance
 async function launchInstances(numInstancesToLaunch) {
   const userDataScript = `#!/bin/bash
-    sudo docker run -d -e AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} -e AWS_REGION=${process.env.AWS_REGION} tanmaysalunke/apptier:latest`;
+        sudo docker run -d -e AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} -e AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} -e AWS_REGION=${process.env.AWS_REGION} tanmaysalunke/apptier:latest`;
 
   const instancesToLaunch = [];
 
@@ -249,7 +249,7 @@ async function autoscaleAppTier() {
   // Scale out (launch more instances)
   if (numInstancesToLaunch > 0) {
     console.log(`Need to launch ${numInstancesToLaunch} new instance(s)`);
-    console.log(numInstancesToLaunch, numRunningInstances);
+    console.log(numInstancesToLaunch, numRunningInstances, instanceCounter); //////////////////////////////////////
     await launchInstances(numInstancesToLaunch);
   }
   // Scale in (terminate excess instances)
