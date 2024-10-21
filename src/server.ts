@@ -3,10 +3,14 @@ import AWS from 'aws-sdk';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
+import * as dotenv from 'dotenv';
+
+// Load the .env file
+dotenv.config();
 
 // Initialize the Express app
 const app = express();
-const port = 3000;
+const port = 80;
 
 // AWS Configuration
 AWS.config.update({
@@ -94,53 +98,55 @@ async function scaleIn(currentInstanceCount: number, desiredInstances: number) {
     }
 }
 
-// Function to monitor SQS and scale in/out EC2 instances accordingly
+const COOLDOWN_PERIOD = 30000; // 30 seconds in milliseconds
+let lastScaleTime = 0; // Timestamp of the last scaling action
+let lastMessageTime = Date.now(); // Timestamp when the last message was processed
+
 async function autoscale() {
     console.log("Running auto scaling");
-    const params = {
+    const result = await sqs.getQueueAttributes({
         QueueUrl: requestQueueUrl,
         AttributeNames: ['ApproximateNumberOfMessages']
+    }).promise();
+
+    const pendingMessages = parseInt(result.Attributes?.ApproximateNumberOfMessages || '0', 10);
+    const now = Date.now();
+    const timeSinceLastMessage = now - lastMessageTime;
+    const timeSinceLastScale = now - lastScaleTime;
+
+    const ec2Params = { 
+        Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
+        MaxResults: 50
     };
 
-    try {
-        const result = await sqs.getQueueAttributes(params).promise();
-        const pendingMessages = parseInt(result.Attributes?.ApproximateNumberOfMessages || '0', 10);
-        console.log(`Pending messages in queue: ${pendingMessages}`);
+    const instanceData = await ec2.describeInstances(ec2Params).promise();
+    const currentInstanceCount = instanceData.Reservations
+        ?.flatMap(res => res.Instances)
+        ?.filter(instance => instance?.State?.Name === 'running').length || 0;
 
-        const ec2Params = {
-            Filters: [{ Name: 'tag:Name', Values: ['app-tier-instance'] }],
-            MaxResults: 50
-        };
+    console.log(`Pending messages in queue: ${pendingMessages}`);
+    console.log(`Current App Tier instance count: ${currentInstanceCount}`);
 
-        const instanceData = await ec2.describeInstances(ec2Params).promise();
-        const currentInstanceCount = instanceData.Reservations
-            ?.flatMap(res => res.Instances)
-            ?.filter(instance => instance?.State?.Name === 'running').length || 0;
-
-        console.log(`Current App Tier instance count: ${currentInstanceCount}`);
-
-        if (pendingMessages > 0) {
-            const desiredInstances = Math.min(maxInstances, pendingMessages);
-            if (desiredInstances > currentInstanceCount) {
-                console.log(`Scaling out to ${desiredInstances} instances.`);
-                await scaleOut(currentInstanceCount, desiredInstances);
-            } else {
-                console.log('Desired instances are less than or equal to current instances. No scaling out required.');
-            }
-        } else if (pendingMessages === 0 && currentInstanceCount > 0) {
-            console.log('Queue is empty. Terminating all instances.');
-            await scaleIn(currentInstanceCount, 0);
+    if (pendingMessages > 0) {
+        lastMessageTime = now;  // Update the last message time
+        const desiredInstances = Math.min(maxInstances, Math.ceil(pendingMessages / 10));  // Assuming one instance can handle 10 messages   
+        if (desiredInstances > currentInstanceCount && timeSinceLastScale > COOLDOWN_PERIOD) {
+            console.log(`Scaling out to ${desiredInstances} instances.`);
+            await scaleOut(currentInstanceCount, desiredInstances);
+            lastScaleTime = Date.now();  // Update the last scale time
         } else {
-            console.log('No scaling action required.');
+            console.log('Desired instances are less than or equal to current instances. No scaling out required.');
         }
-    } catch (error) {
-        console.error('Error during autoscaling:', error);
+    } else if (pendingMessages === 0 && currentInstanceCount > 0 && timeSinceLastMessage > COOLDOWN_PERIOD && timeSinceLastScale > COOLDOWN_PERIOD) {
+        console.log('Queue is empty and cooldown period has passed. Terminating all instances.');
+        await scaleIn(currentInstanceCount, 0);
+        lastScaleTime = Date.now();  // Update the last scale time
+    } else {
+        console.log('No scaling action required or waiting for cooldown period to pass.');
     }
 }
 
-
-// Periodically run autoscaling logic
-setInterval(autoscale, 5 * 1000); // Runs every 5 seconds
+setInterval(autoscale, 5000); // Periodically run autoscaling logic every 5 seconds
 
 // Define root directory relative to the current file (even in dist)
 const rootDir = path.resolve(__dirname, '..');
@@ -158,18 +164,16 @@ app.post('/', upload.single('inputFile'), async (req: Request, res: Response): P
     // Remove file extension for consistent naming
     const fileName = req.file.originalname;
     const baseFileName = path.basename(fileName, path.extname(fileName));
-
-    const fileContent = fs.readFileSync(req.file.path).toString('base64');  // Encode image as base64
+    
     fs.unlinkSync(req.file.path); // Delete the uploaded file immediately after reading
 
     const sqsParams = {
         QueueUrl: requestQueueUrl,
         MessageBody: JSON.stringify({
-            fileName: baseFileName,  // Use the base file name without extension for the message
-            fileContent
+            imageKey: req.file.originalname,
+            imageContent: fs.readFileSync(req.file.path).toString("base64"),
         })
     };
-    const RESPONSE_TIMEOUT = 200000;
     const requestId = baseFileName;
     try {
         await sqs.sendMessage(sqsParams).promise();
@@ -177,15 +181,11 @@ app.post('/', upload.single('inputFile'), async (req: Request, res: Response): P
 
         // Wait for the classification result or timeout
         const result = await new Promise<string>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                pendingRequests.delete(baseFileName);
-                reject(new Error("Timeout waiting for response"));
-            }, RESPONSE_TIMEOUT);
+            // Register the resolve function in a map with the request ID
+            pendingRequests.set(requestId, resolve);
 
-            pendingRequests.set(baseFileName, (result: string) => {
-                clearTimeout(timer);
-                resolve(result);
-            });
+            // Optionally handle result not being available yet here,
+            // for example by checking after a long period or handling this via another route or system
         });
 
         // Send the result back to the client

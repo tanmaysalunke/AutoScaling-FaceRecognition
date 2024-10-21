@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 80
 
 # Run the server
-CMD ["node", "dist/server.js"]
+CMD ["node", "web-tier.js"]
