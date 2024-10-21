@@ -164,7 +164,7 @@ async function getRunningInstances() {
   return runningInstances;
 }
 
-let instanceCounter = 1;
+let instanceCounter = 0;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -185,7 +185,7 @@ async function launchInstances(numInstancesToLaunch) {
   console.log("Will launch the instances");
   // Generate instance launch params for each instance
   for (let i = 0; i < maxLaunchableInstances; i++) {
-    console.log("Hrushikesh wants to read");
+    // console.log("Hrushikesh wants to read");
     console.log(instanceCounter);
     const params = {
       ImageId: amiId,
@@ -240,6 +240,9 @@ async function autoscaleAppTier() {
   const queueLength = await getQueueLength();
   const runningInstances = await getRunningInstances();
   const numRunningInstances = runningInstances.length;
+  if (numRunningInstances === 0) {
+    instanceCounter = 0;
+  } ////////////////////
   instanceCounter = numRunningInstances + 1;
 
   console.log(`Queue length: ${queueLength}`);
@@ -270,7 +273,7 @@ app.listen(port, () => {
   console.log(`Web Tier running on port ${port}`);
 });
 
-const autoscalingInterval = 30000; // 60 seconds
+const autoscalingInterval = 10000; // 60 seconds
 
 // Call autoscaleAppTier at regular intervals
 setInterval(async () => {
