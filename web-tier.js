@@ -249,6 +249,7 @@ async function autoscaleAppTier() {
   // Scale out (launch more instances)
   if (numInstancesToLaunch > 0) {
     console.log(`Need to launch ${numInstancesToLaunch} new instance(s)`);
+    console.log(numInstancesToLaunch);
     await launchInstances(numInstancesToLaunch);
   }
   // Scale in (terminate excess instances)
