@@ -185,8 +185,10 @@ async function launchInstances(numInstancesToLaunch) {
   console.log("Will launch the instances");
   // Generate instance launch params for each instance
   for (let i = 0; i < maxLaunchableInstances; i++) {
-    // console.log("Hrushikesh wants to read");
     console.log(instanceCounter);
+    if (instanceCounter > maxInstances) {
+      break;
+    }
     const params = {
       ImageId: amiId,
       InstanceType: instanceType,
