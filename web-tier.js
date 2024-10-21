@@ -164,6 +164,8 @@ async function getRunningInstances() {
   return runningInstances;
 }
 
+let instanceCounter = 1;
+
 // Launch a new app-tier instance
 async function launchInstances(numInstancesToLaunch) {
   const userDataScript = `#!/bin/bash
